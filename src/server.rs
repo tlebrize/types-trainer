@@ -2,15 +2,11 @@
 //! generated two 3types tuples and sends them to each clients
 //! wait for decision both clients
 //! computes winner and sends results
-
-#![allow(dead_code, unused_imports, unused_variables)]
 use rand::{rngs::ThreadRng, seq::SliceRandom};
 use std::{
-	collections::{BTreeMap, HashMap},
+	collections::BTreeMap,
 	env,
-	error::Error,
 	io::Error as IoError,
-	mem,
 	net::SocketAddr,
 	sync::{Arc, Mutex},
 };
@@ -20,7 +16,7 @@ use futures_channel::mpsc::{unbounded, UnboundedSender};
 use futures_util::{future, pin_mut, stream::TryStreamExt, StreamExt};
 
 use tokio::net::{TcpListener, TcpStream};
-use tokio::task::JoinHandle;
+
 use tungstenite::protocol::Message;
 
 type Tx = UnboundedSender<Message>;
@@ -107,17 +103,6 @@ impl Clients {
 		} else {
 			panic!("clients is full.");
 		}
-	}
-
-	fn get_other(&self, addr: SocketAddr) -> Option<Tx> {
-		if self.p1.is_some() && self.p1.as_ref().unwrap().addr != addr {
-			return Some(self.p1.as_ref().unwrap().tx.clone());
-		}
-		if self.p2.is_some() && self.p2.as_ref().unwrap().addr != addr {
-			return Some(self.p2.as_ref().unwrap().tx.clone());
-		}
-
-		None
 	}
 
 	fn set_ready(&mut self, addr: SocketAddr) {
