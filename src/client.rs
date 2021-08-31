@@ -7,7 +7,11 @@ use futures_channel::{
 };
 use futures_util::{future, pin_mut, StreamExt};
 use raylib::prelude::*;
-use std::{collections::BTreeMap, env, process};
+use std::{
+    cmp::{max, min},
+    collections::BTreeMap,
+    env,
+};
 use tokio::spawn;
 use tokio_tungstenite::tungstenite::Error as TungsteniteError;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
@@ -23,9 +27,9 @@ enum Outcome {
 
 enum GameState {
     WaitingForChoices,
-    GotChoices(Vec<String>, Vec<String>),
+    GotChoices(Vec<String>, Vec<String>, usize),
     WaitingForOtherSelected,
-    GotOutcome(Outcome),
+    GotOutcome(Outcome, String, String),
 }
 
 fn tex_rec() -> Rectangle {
@@ -117,26 +121,27 @@ fn get_message(read_rx: &mut ReadRx) -> Option<String> {
 fn draw_choices(
     draw_handle: &mut RaylibDrawHandle,
     ts: &TextureStore,
-    mine: &Vec<String>,
-    theirs: &Vec<String>,
+    mine: &[String],
+    theirs: &[String],
+    i: usize,
 ) {
     draw_handle.draw_texture_rec(
         &ts.textures[&*mine[0]],
         tex_rec(),
         Vector2 { x: 50.0, y: 280.0 },
-        Color::WHITE,
+        if i == 0 { Color::GRAY } else { Color::WHITE },
     );
     draw_handle.draw_texture_rec(
         &ts.textures[&*mine[1]],
         tex_rec(),
         Vector2 { x: 285.0, y: 280.0 },
-        Color::WHITE,
+        if i == 1 { Color::GRAY } else { Color::WHITE },
     );
     draw_handle.draw_texture_rec(
         &ts.textures[&*mine[2]],
         tex_rec(),
         Vector2 { x: 520.0, y: 280.0 },
-        Color::WHITE,
+        if i == 2 { Color::GRAY } else { Color::WHITE },
     );
 
     draw_handle.draw_texture_rec(
@@ -159,32 +164,80 @@ fn draw_choices(
     );
 }
 
-fn handle_input(draw_handle: &mut RaylibDrawHandle, mine: &Vec<String>) -> Option<String> {
+fn handle_input(
+    draw_handle: &mut RaylibDrawHandle,
+    mine: &[String],
+    hoover_index: usize,
+) -> (Option<String>, Option<usize>) {
     if draw_handle.is_key_pressed(KeyboardKey::KEY_LEFT) {
-        Some(mine[0].clone())
-    } else if draw_handle.is_key_pressed(KeyboardKey::KEY_UP) {
-        Some(mine[1].clone())
+        (None, Some(max(1, hoover_index) - 1))
     } else if draw_handle.is_key_pressed(KeyboardKey::KEY_RIGHT) {
-        Some(mine[2].clone())
+        (None, Some(min(2, hoover_index + 1)))
+    } else if draw_handle.is_key_pressed(KeyboardKey::KEY_ENTER) {
+        (Some(mine[hoover_index].clone()), None)
     } else {
-        None
+        (None, Some(hoover_index))
     }
 }
 
-fn draw_outcome(outcome: &Outcome) {
-    println!(
-        "{:?}",
-        match outcome {
-            Outcome::Won => "You won !",
-            Outcome::Lost => "You lost :/",
-            Outcome::Tie => "Its a tie",
+fn draw_outcome(
+    draw_handle: &mut RaylibDrawHandle,
+    outcome: &Outcome,
+    yours: String,
+    theirs: String,
+) {
+    let (yours, theirs) = (&*yours, &*theirs);
+    match outcome {
+        Outcome::Won => {
+            draw_handle.draw_text("You won !", 320, 240, 24, Color::BLACK);
+            draw_handle.draw_text(
+                &*format!("{} beats {}", yours, theirs),
+                200,
+                280,
+                20,
+                Color::BLACK,
+            );
         }
-    );
-    process::exit(0);
+        Outcome::Lost => {
+            draw_handle.draw_text("You lost :/", 320, 240, 24, Color::BLACK);
+            draw_handle.draw_text(
+                &*format!("{} beats {}", theirs, yours),
+                200,
+                280,
+                20,
+                Color::BLACK,
+            );
+        }
+        Outcome::Tie => {
+            draw_handle.draw_text("Its a tie ...", 320, 240, 24, Color::BLACK);
+            draw_handle.draw_text(
+                &*format!("{} == {}", theirs, yours),
+                200,
+                280,
+                20,
+                Color::BLACK,
+            );
+        }
+    };
+}
+
+fn parse_outcome(message: String) -> (Outcome, String, String) {
+    let parsed: Vec<String> = message.splitn(3, ';').map(String::from).collect();
+
+    let (status, yours, theirs) = (parsed[0].clone(), parsed[1].clone(), parsed[2].clone());
+
+    let outcome = match &*status {
+        "won" => Outcome::Won,
+        "lost" => Outcome::Lost,
+        "tie" => Outcome::Tie,
+        _ => panic!("wtf?"),
+    };
+    (outcome, yours, theirs)
 }
 
 async fn main_loop(mut read_rx: ReadRx, write_tx: WriteTx) {
     let mut gamestate = GameState::WaitingForChoices;
+
     write_tx
         .unbounded_send(Message::Text("ready:_".to_string()))
         .unwrap();
@@ -203,32 +256,40 @@ async fn main_loop(mut read_rx: ReadRx, write_tx: WriteTx) {
             GameState::WaitingForChoices => {
                 if let Some(choices) = get_message(&mut read_rx) {
                     let (mine, theirs) = parse_choices(choices);
-                    gamestate = GameState::GotChoices(mine, theirs);
+                    gamestate = GameState::GotChoices(mine, theirs, 1);
                 }
             }
-            GameState::GotChoices(ref mine, ref theirs) => {
-                draw_choices(&mut draw_handle, &ts, mine, theirs);
-                if let Some(selected) = handle_input(&mut draw_handle, mine) {
-                    let msg = format!("selected:{}", selected);
-                    write_tx
-                        .unbounded_send(Message::Text(msg.to_string()))
-                        .unwrap();
-                    gamestate = GameState::WaitingForOtherSelected;
+            GameState::GotChoices(ref mine, ref theirs, hoover_index) => {
+                draw_choices(&mut draw_handle, &ts, mine, theirs, hoover_index);
+
+                match handle_input(&mut draw_handle, mine, hoover_index) {
+                    (Some(selected), None) => {
+                        let msg = format!("selected:{}", selected);
+                        write_tx
+                            .unbounded_send(Message::Text(msg.to_string()))
+                            .unwrap();
+                        gamestate = GameState::WaitingForOtherSelected;
+                    }
+                    (None, Some(hoover_index)) => {
+                        gamestate =
+                            GameState::GotChoices(mine.to_vec(), theirs.to_vec(), hoover_index);
+                    }
+                    _ => panic!("invalid state!"),
                 }
             }
             GameState::WaitingForOtherSelected => {
                 if let Some(message) = get_message(&mut read_rx) {
-                    let outcome = match &*message {
-                        "won" => Outcome::Won,
-                        "lost" => Outcome::Lost,
-                        "tie" => Outcome::Tie,
-                        _ => panic!("wtf?"),
-                    };
-                    gamestate = GameState::GotOutcome(outcome)
+                    let (outcome, yours, theirs) = parse_outcome(message);
+                    gamestate = GameState::GotOutcome(outcome, yours, theirs);
                 }
             }
-            GameState::GotOutcome(ref outcome) => {
-                draw_outcome(outcome);
+            GameState::GotOutcome(ref outcome, ref yours, ref theirs) => {
+                draw_outcome(
+                    &mut draw_handle,
+                    outcome,
+                    yours.to_string(),
+                    theirs.to_string(),
+                );
             }
         }
     }

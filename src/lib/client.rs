@@ -1,11 +1,12 @@
+#![allow(dead_code)]
 pub fn parse_choices(choices: String) -> (Vec<String>, Vec<String>) {
     let c: Vec<Vec<String>> = choices
-        .splitn(2, ";")
+        .splitn(2, ';')
         .map(|x| {
-            x.splitn(2, ":")
+            x.splitn(2, ':')
                 .nth(1)
                 .unwrap()
-                .split(",")
+                .split(',')
                 .map(String::from)
                 .collect()
         })

@@ -1,3 +1,6 @@
+mod lib;
+use crate::lib::server::{compute_scores, TreeType};
+
 use rand::{rngs::ThreadRng, seq::SliceRandom};
 use std::{
     collections::BTreeMap,
@@ -17,7 +20,6 @@ use tungstenite::protocol::Message;
 
 type Tx = UnboundedSender<Message>;
 type ClientsArc = Arc<Mutex<Clients>>;
-type TreeType = BTreeMap<&'static str, Vec<&'static str>>;
 
 const TYPES: [&str; 18] = [
     "bug", "dark", "dragon", "electric", "fairy", "fighting", "fire", "flying", "ghost", "grass",
@@ -59,22 +61,8 @@ impl Client {
         );
     }
 
-    fn win(&self) {
-        let msg = "won".to_string();
-        self.tx
-            .unbounded_send(tungstenite::Message::Text(msg))
-            .unwrap();
-    }
-
-    fn loose(&self) {
-        let msg = "lost".to_string();
-        self.tx
-            .unbounded_send(tungstenite::Message::Text(msg))
-            .unwrap();
-    }
-
-    fn tie(&self) {
-        let msg = "tie".to_string();
+    fn send_outcome(&self, status: &'static str, yours: String, theirs: String) {
+        let msg = format!("{};{};{}", status, yours, theirs);
         self.tx
             .unbounded_send(tungstenite::Message::Text(msg))
             .unwrap();
@@ -206,42 +194,34 @@ impl Clients {
     }
 
     fn send_outcome(&self) {
-        let mut p1_score = 1;
-        let mut p2_score = 1;
-
-        let strengths = make_strengths_graph();
-        let weaknesses = make_weaknesses_graph();
-
         if let Some((p1_selected, p2_selected)) = self.get_selected() {
-            if strengths[&*p1_selected].contains(&&*p2_selected) {
-                p1_score *= 2;
-            }
-            if weaknesses[&*p1_selected].contains(&&*p2_selected) {
-                p1_score /= 2;
-            }
+            let p1 = self.p1.as_ref().unwrap();
+            let p2 = self.p2.as_ref().unwrap();
 
-            if strengths[&*p2_selected].contains(&&*p1_selected) {
-                p2_score *= 2;
+            let strengths = make_strengths_graph();
+            let weaknesses = make_weaknesses_graph();
+
+            let (p1_score, p2_score) = compute_scores(
+                p1_selected.clone(),
+                p2_selected.clone(),
+                strengths,
+                weaknesses,
+            );
+
+            println!("p1: {} vs p2: {}", p1_score, p2_score);
+
+            if p1_score == p2_score {
+                p1.send_outcome("tie", p1_selected.clone(), p2_selected.clone());
+                p2.send_outcome("tie", p1_selected, p2_selected);
+            } else if p1_score > p2_score {
+                p1.send_outcome("won", p1_selected.clone(), p2_selected.clone());
+                p2.send_outcome("lost", p2_selected, p1_selected);
+            } else {
+                p1.send_outcome("lost", p1_selected.clone(), p2_selected.clone());
+                p2.send_outcome("won", p2_selected, p1_selected);
             }
-            if weaknesses[&*p2_selected].contains(&&*p1_selected) {
-                p2_score /= 2;
-            }
-        }
-
-        let p1 = self.p1.as_ref().unwrap();
-        let p2 = self.p2.as_ref().unwrap();
-
-        println!("p1: {} vs p2: {}", p1_score, p2_score);
-
-        if p1_score == p2_score {
-            p1.tie();
-            p2.tie();
-        } else if p1_score > p2_score {
-            p1.win();
-            p2.loose();
         } else {
-            p1.loose();
-            p2.win();
+            panic!("Cannot find outcome !");
         }
     }
 
