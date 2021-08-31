@@ -1,4 +1,3 @@
-#![allow(dead_code, unused_imports, unused_variables)]
 mod lib;
 
 use crate::lib::client::parse_choices;
@@ -111,8 +110,7 @@ fn get_message(read_rx: &mut ReadRx) -> Option<String> {
             message = msg.unwrap().to_string();
             Some(message)
         }
-        Ok(None) => None,
-        Err(e) => None,
+        Ok(None) | Err(_) => None,
     }
 }
 
@@ -174,11 +172,14 @@ fn handle_input(draw_handle: &mut RaylibDrawHandle, mine: &Vec<String>) -> Optio
 }
 
 fn draw_outcome(outcome: &Outcome) {
-    println!("{:?}", match outcome {
-        Outcome::Won => "You won !",
-        Outcome::Lost => "You lost :/",
-        Outcome::Tie => "Its a tie",
-    });
+    println!(
+        "{:?}",
+        match outcome {
+            Outcome::Won => "You won !",
+            Outcome::Lost => "You lost :/",
+            Outcome::Tie => "Its a tie",
+        }
+    );
     process::exit(0);
 }
 
