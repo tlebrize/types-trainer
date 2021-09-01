@@ -1,6 +1,11 @@
 mod libclient;
 
-use crate::libclient::client::parse_choices;
+use crate::libclient::{
+    drawing::{draw_choices, draw_outcome, retry},
+    state::{GameState, Outcome},
+    textures::TextureStore,
+    utils::parse_choices,
+};
 use futures_channel::{
     mpsc,
     mpsc::{UnboundedReceiver, UnboundedSender},
@@ -9,7 +14,6 @@ use futures_util::{future, pin_mut, StreamExt};
 use raylib::prelude::*;
 use std::{
     cmp::{max, min},
-    collections::BTreeMap,
     env,
 };
 use tokio::spawn;
@@ -18,93 +22,6 @@ use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 
 type ReadRx = UnboundedReceiver<Result<Message, TungsteniteError>>;
 type WriteTx = UnboundedSender<Message>;
-
-enum Outcome {
-    Won,
-    Lost,
-    Tie,
-}
-
-enum GameState {
-    WaitingForChoices,
-    GotChoices(Vec<String>, Vec<String>, usize),
-    WaitingForOtherSelected,
-    GotOutcome(Outcome, String, String),
-}
-
-fn tex_rec() -> Rectangle {
-    Rectangle {
-        x: 0.0,
-        y: 0.0,
-        width: 70.0,
-        height: 70.0,
-    }
-}
-
-fn get_type_texture(
-    type_: &str,
-    handle: &mut raylib::RaylibHandle,
-    thread: &RaylibThread,
-) -> Result<Texture2D, String> {
-    let type_filename = format!("media/{}.png", type_);
-    let type_image = Image::load_image(&type_filename)?;
-    handle.load_texture_from_image(thread, &type_image)
-}
-
-struct TextureStore {
-    textures: BTreeMap<&'static str, Texture2D>,
-}
-
-impl TextureStore {
-    fn new(handle: &mut RaylibHandle, thread: &RaylibThread) -> Self {
-        let mut t = BTreeMap::new();
-
-        t.insert("bug", get_type_texture("bug", handle, thread).unwrap());
-        t.insert("dark", get_type_texture("dark", handle, thread).unwrap());
-        t.insert(
-            "dragon",
-            get_type_texture("dragon", handle, thread).unwrap(),
-        );
-        t.insert(
-            "electric",
-            get_type_texture("electric", handle, thread).unwrap(),
-        );
-        t.insert("fairy", get_type_texture("fairy", handle, thread).unwrap());
-        t.insert(
-            "fighting",
-            get_type_texture("fighting", handle, thread).unwrap(),
-        );
-        t.insert("fire", get_type_texture("fire", handle, thread).unwrap());
-        t.insert(
-            "flying",
-            get_type_texture("flying", handle, thread).unwrap(),
-        );
-        t.insert("ghost", get_type_texture("ghost", handle, thread).unwrap());
-        t.insert("grass", get_type_texture("grass", handle, thread).unwrap());
-        t.insert(
-            "ground",
-            get_type_texture("ground", handle, thread).unwrap(),
-        );
-        t.insert("ice", get_type_texture("ice", handle, thread).unwrap());
-        t.insert(
-            "poison",
-            get_type_texture("poison", handle, thread).unwrap(),
-        );
-        t.insert(
-            "psychic",
-            get_type_texture("psychic", handle, thread).unwrap(),
-        );
-        t.insert("rock", get_type_texture("rock", handle, thread).unwrap());
-        t.insert("steel", get_type_texture("steel", handle, thread).unwrap());
-        t.insert("water", get_type_texture("water", handle, thread).unwrap());
-        t.insert(
-            "normal",
-            get_type_texture("normal", handle, thread).unwrap(),
-        );
-
-        TextureStore { textures: t }
-    }
-}
 
 fn get_message(read_rx: &mut ReadRx) -> Option<String> {
     let message: String;
@@ -116,52 +33,6 @@ fn get_message(read_rx: &mut ReadRx) -> Option<String> {
         }
         Ok(None) | Err(_) => None,
     }
-}
-
-fn draw_choices(
-    draw_handle: &mut RaylibDrawHandle,
-    ts: &TextureStore,
-    mine: &[String],
-    theirs: &[String],
-    i: usize,
-) {
-    draw_handle.draw_texture_rec(
-        &ts.textures[&*mine[0]],
-        tex_rec(),
-        Vector2 { x: 50.0, y: 280.0 },
-        if i == 0 { Color::GRAY } else { Color::WHITE },
-    );
-    draw_handle.draw_texture_rec(
-        &ts.textures[&*mine[1]],
-        tex_rec(),
-        Vector2 { x: 285.0, y: 280.0 },
-        if i == 1 { Color::GRAY } else { Color::WHITE },
-    );
-    draw_handle.draw_texture_rec(
-        &ts.textures[&*mine[2]],
-        tex_rec(),
-        Vector2 { x: 520.0, y: 280.0 },
-        if i == 2 { Color::GRAY } else { Color::WHITE },
-    );
-
-    draw_handle.draw_texture_rec(
-        &ts.textures[&*theirs[0]],
-        tex_rec(),
-        Vector2 { x: 50.0, y: 50.0 },
-        Color::WHITE,
-    );
-    draw_handle.draw_texture_rec(
-        &ts.textures[&*theirs[1]],
-        tex_rec(),
-        Vector2 { x: 285.0, y: 50.0 },
-        Color::WHITE,
-    );
-    draw_handle.draw_texture_rec(
-        &ts.textures[&*theirs[2]],
-        tex_rec(),
-        Vector2 { x: 520.0, y: 50.0 },
-        Color::WHITE,
-    );
 }
 
 fn handle_input(
@@ -178,52 +49,6 @@ fn handle_input(
     } else {
         (None, Some(hoover_index))
     }
-}
-
-fn retry(draw_handle: &mut RaylibDrawHandle) -> bool {
-    draw_handle.draw_text("Press enter to play again.", 10, 10, 10, Color::BLACK);
-    draw_handle.is_key_pressed(KeyboardKey::KEY_ENTER)
-}
-
-fn draw_outcome(
-    draw_handle: &mut RaylibDrawHandle,
-    outcome: &Outcome,
-    yours: String,
-    theirs: String,
-) {
-    let (yours, theirs) = (&*yours, &*theirs);
-    match outcome {
-        Outcome::Won => {
-            draw_handle.draw_text("You won !", 320, 240, 24, Color::BLACK);
-            draw_handle.draw_text(
-                &*format!("{} beats {}", yours, theirs),
-                200,
-                280,
-                20,
-                Color::BLACK,
-            );
-        }
-        Outcome::Lost => {
-            draw_handle.draw_text("You lost :/", 320, 240, 24, Color::BLACK);
-            draw_handle.draw_text(
-                &*format!("{} beats {}", theirs, yours),
-                200,
-                280,
-                20,
-                Color::BLACK,
-            );
-        }
-        Outcome::Tie => {
-            draw_handle.draw_text("Its a tie ...", 320, 240, 24, Color::BLACK);
-            draw_handle.draw_text(
-                &*format!("{} == {}", theirs, yours),
-                200,
-                280,
-                20,
-                Color::BLACK,
-            );
-        }
-    };
 }
 
 fn parse_outcome(message: String) -> (Outcome, String, String) {
