@@ -1,6 +1,6 @@
-mod lib;
+mod libclient;
 
-use crate::lib::client::parse_choices;
+use crate::libclient::client::parse_choices;
 use futures_channel::{
     mpsc,
     mpsc::{UnboundedReceiver, UnboundedSender},
