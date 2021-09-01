@@ -10,6 +10,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use chrono::{DateTime, Utc};
+
 use futures::future::join_all;
 use futures_channel::mpsc::{unbounded, UnboundedSender};
 use futures_util::{future, pin_mut, stream::TryStreamExt, StreamExt};
@@ -38,6 +40,7 @@ struct Client {
     choices: Option<Vec<String>>,
     selected: Option<String>,
     ready: bool,
+    timer: Option<DateTime<Utc>>,
 }
 
 impl Client {
@@ -47,6 +50,7 @@ impl Client {
             tx,
             choices: None,
             selected: None,
+            timer: None,
             ready: false,
         }
     }
@@ -193,7 +197,7 @@ impl Clients {
         Some((p1_selected, p2_selected))
     }
 
-    fn send_outcome(&self) {
+    fn send_outcomes(&self) {
         if let Some((p1_selected, p2_selected)) = self.get_selected() {
             let p1 = self.p1.as_ref().unwrap();
             let p2 = self.p2.as_ref().unwrap();
@@ -241,6 +245,59 @@ impl Clients {
                     .unwrap();
             }
         }
+    }
+
+    fn reset(&mut self) {
+        if let Some(ref mut p1) = self.p1 {
+            p1.choices = None;
+            p1.selected = None;
+            p1.ready = false;
+        }
+        if let Some(ref mut p2) = self.p2 {
+            p2.choices = None;
+            p2.selected = None;
+            p2.ready = false;
+        }
+    }
+
+    fn set_timers(&mut self) {
+        if let Some(ref mut p1) = self.p1 {
+            p1.timer = Some(Utc::now());
+        }
+
+        if let Some(ref mut p2) = self.p2 {
+            p2.timer = Some(Utc::now());
+        }
+    }
+
+    fn stop_timer(&mut self, addr: SocketAddr) -> bool {
+        if let Some(ref mut p1) = self.p1 {
+            if p1.addr == addr && p1.timer.is_some() {
+                let time_diff = p1
+                    .timer
+                    .unwrap()
+                    .signed_duration_since(Utc::now())
+                    .num_seconds();
+                println!("{}:{}", addr, time_diff);
+                p1.timer = None;
+                return time_diff < -5;
+            }
+        }
+
+        if let Some(ref mut p2) = self.p2 {
+            if p2.addr == addr && p2.timer.is_some() {
+                let time_diff = p2
+                    .timer
+                    .unwrap()
+                    .signed_duration_since(Utc::now())
+                    .num_seconds();
+                println!("{}:{}", addr, time_diff);
+                p2.timer = None;
+                return time_diff > 15;
+            }
+        }
+
+        panic!("invalid addr: {}. Or timers were not set.", addr);
     }
 }
 
@@ -345,15 +402,22 @@ async fn handle_connection(clients: ClientsArc, raw_stream: TcpStream, addr: Soc
                 if c.both_ready() {
                     println!("both ready, sending choices.");
                     c.send_choices();
+                    c.set_timers();
                 }
             }
             Action::Selected(type_) => {
                 let mut c = clients.lock().unwrap();
                 c.set_selected(addr, type_.clone());
+                if c.stop_timer(addr) {
+                    println!("{} Timed out !", addr);
+                    c.send_msg(addr, "timedout;_;_".to_string());
+                    c.reset();
+                }
                 println!("{} selected {}", addr, type_);
                 if c.both_selected() {
                     println!("both selected, computing outcome.");
-                    c.send_outcome();
+                    c.send_outcomes();
+                    c.reset();
                 }
             }
             Action::Error => {
