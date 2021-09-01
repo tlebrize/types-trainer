@@ -193,7 +193,7 @@ impl Clients {
         Some((p1_selected, p2_selected))
     }
 
-    fn send_outcome(&self) {
+    fn send_outcomes(&self) {
         if let Some((p1_selected, p2_selected)) = self.get_selected() {
             let p1 = self.p1.as_ref().unwrap();
             let p2 = self.p2.as_ref().unwrap();
@@ -240,6 +240,19 @@ impl Clients {
                     .unbounded_send(tungstenite::Message::Text(msg))
                     .unwrap();
             }
+        }
+    }
+
+    fn reset(&mut self) {
+        if let Some(ref mut p1) = self.p1 {
+            p1.choices = None;
+            p1.selected = None;
+            p1.ready = false;
+        }
+        if let Some(ref mut p2) = self.p2 {
+            p2.choices = None;
+            p2.selected = None;
+            p2.ready = false;
         }
     }
 }
@@ -353,7 +366,8 @@ async fn handle_connection(clients: ClientsArc, raw_stream: TcpStream, addr: Soc
                 println!("{} selected {}", addr, type_);
                 if c.both_selected() {
                     println!("both selected, computing outcome.");
-                    c.send_outcome();
+                    c.send_outcomes();
+                    c.reset();
                 }
             }
             Action::Error => {

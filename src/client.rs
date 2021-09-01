@@ -180,6 +180,11 @@ fn handle_input(
     }
 }
 
+fn retry(draw_handle: &mut RaylibDrawHandle) -> bool {
+    draw_handle.draw_text("Press enter to play again.", 10, 10, 10, Color::BLACK);
+    draw_handle.is_key_pressed(KeyboardKey::KEY_ENTER)
+}
+
 fn draw_outcome(
     draw_handle: &mut RaylibDrawHandle,
     outcome: &Outcome,
@@ -237,6 +242,7 @@ fn parse_outcome(message: String) -> (Outcome, String, String) {
 
 async fn main_loop(mut read_rx: ReadRx, write_tx: WriteTx) {
     let mut gamestate = GameState::WaitingForChoices;
+    let mut scores = (0, 0);
 
     write_tx
         .unbounded_send(Message::Text("ready:_".to_string()))
@@ -252,8 +258,17 @@ async fn main_loop(mut read_rx: ReadRx, write_tx: WriteTx) {
         let mut draw_handle = handle.begin_drawing(&thread);
         draw_handle.clear_background(Color::WHITE);
 
+        draw_handle.draw_text(
+            &*format!("{}/{}", scores.0, scores.1),
+            615,
+            10,
+            10,
+            Color::BLACK,
+        );
+
         match gamestate {
             GameState::WaitingForChoices => {
+                draw_handle.draw_text("Waiting for Opponent ...", 10, 10, 10, Color::BLACK);
                 if let Some(choices) = get_message(&mut read_rx) {
                     let (mine, theirs) = parse_choices(choices);
                     gamestate = GameState::GotChoices(mine, theirs, 1);
@@ -278,6 +293,7 @@ async fn main_loop(mut read_rx: ReadRx, write_tx: WriteTx) {
                 }
             }
             GameState::WaitingForOtherSelected => {
+                draw_handle.draw_text("Waiting for Opponent ...", 10, 10, 10, Color::BLACK);
                 if let Some(message) = get_message(&mut read_rx) {
                     let (outcome, yours, theirs) = parse_outcome(message);
                     gamestate = GameState::GotOutcome(outcome, yours, theirs);
@@ -290,6 +306,18 @@ async fn main_loop(mut read_rx: ReadRx, write_tx: WriteTx) {
                     yours.to_string(),
                     theirs.to_string(),
                 );
+                if retry(&mut draw_handle) {
+                    match outcome {
+                        Outcome::Won => scores.0 += 1,
+                        Outcome::Lost => scores.1 += 1,
+                        _ => (),
+                    }
+
+                    gamestate = GameState::WaitingForChoices;
+                    write_tx
+                        .unbounded_send(Message::Text("ready:_".to_string()))
+                        .unwrap();
+                }
             }
         }
     }
